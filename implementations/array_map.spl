@@ -1,0 +1,566 @@
+/* This file implements a library for a data structure representing partial maps from an ordered type of keys K to a type of values V. */
+
+options "-simplearrays"
+
+include "ordered_type.spl"
+include "array_basic.spl"
+  
+type V
+  
+datatype Pair = pair(key: K, val: V)
+
+// Define array element type used in array_basic.spl
+type E = Pair
+  
+datatype OptionV = NoneV | SomeV(some: V)
+  
+/** {Spec} Utility functions on maps */
+
+lemma swap_writes(m: Map<K, OptionV>, p1: Pair, p2: Pair)
+  requires p1.key != p2.key
+  ensures m[p1.key := SomeV(p1.val)][p2.key := SomeV(p2.val)] == m[p2.key := SomeV(p2.val)][p1.key := SomeV(p1.val)]
+{
+}
+
+// The empty map from keys to values
+function empty_map() returns (res: Map<K, OptionV>)
+{ { k: K :: NoneV } }
+
+
+// Concatenation of partial maps
+function append(m1: Map<K, OptionV>, m2: Map<K, OptionV>)
+  returns (m: Map<K, OptionV>)
+{
+  { k: K :: m1[k] == NoneV ? m2[k] : m1[k] }
+}
+
+// The empty map is the right identity of append
+lemma append_empty_right(m: Map<K, OptionV>)
+  ensures append(m, empty_map) == m
+{
+  pure assert forall k: K :: append(m, empty_map)[k] == m[k] with {
+    if (m[k] == NoneV) {
+      pure assert m[k] == empty_map[k];
+    }
+  }
+}
+
+// The empty map is the left identity of append
+lemma append_empty_left(m: Map<K, OptionV>)
+  ensures append(empty_map, m) == m
+{
+  pure assert forall k: K :: append(empty_map, m)[k] == m[k] with {
+    if (m[k] == NoneV) {
+      pure assert m[k] == empty_map[k];
+    }
+  }
+}
+
+
+lemma append_none(m1: Map<K, OptionV>, m2: Map<K, OptionV>, p: Pair)
+  ensures m1[p.key] == NoneV ==> append(m1[p.key := SomeV(p.val)], m2) == append(m1, m2[p.key := SomeV(p.val)])
+{
+  if (m1[p.key] == NoneV) {
+    pure assert forall k: K :: append(m1[p.key := SomeV(p.val)], m2)[k] == append(m1, m2[p.key := SomeV(p.val)])[k] with {
+      if (k == p.key) {
+        pure assert append(m1[p.key := SomeV(p.val)], m2)[k] == SomeV(p.val);
+      } else if (m1[k] == NoneV) {
+        pure assert append(m1[p.key := SomeV(p.val)], m2)[k] == m2[k];
+      }
+    }
+  }
+}
+
+lemma append_write(m1: Map<K, OptionV>, m2: Map<K, OptionV>, p1: Pair, p2: Pair)
+  requires p1.key == p2.key
+  ensures append(m1[p1.key := SomeV(p1.val)], m2[p2.key := SomeV(p2.val)]) == append(m1, m2)[p1.key := SomeV(p1.val)]
+{
+  pure assert forall k: K :: append(m1[p1.key := SomeV(p1.val)], m2[p2.key := SomeV(p2.val)])[k] == append(m1, m2)[p1.key := SomeV(p1.val)][k] with {
+    if (k == p1.key) {
+      pure assert append(m1[p1.key := SomeV(p1.val)], m2[p2.key := SomeV(p2.val)])[k] == SomeV(p1.val);
+    } else if (m1[k] == NoneV) {
+      pure assert append(m1[p1.key := SomeV(p1.val)], m2[p2.key := SomeV(p2.val)])[k] == m2[k];
+    }
+  }
+}
+
+lemma append_write_left(m1: Map<K, OptionV>, m2: Map<K, OptionV>, p: Pair)
+  ensures append(m1[p.key := SomeV(p.val)], m2) == append(m1, m2)[p.key := SomeV(p.val)];
+{
+  pure assert forall k: K :: append(m1[p.key := SomeV(p.val)], m2)[k] == append(m1, m2)[p.key := SomeV(p.val)][k] with {
+    if (k == p.key) {
+      pure assert append(m1[p.key := SomeV(p.val)], m2)[k] == SomeV(p.val);
+    } else if (m1[k] == NoneV) {
+      pure assert append(m1[p.key := SomeV(p.val)], m2)[k] == m2[k];
+    }
+  }
+}
+
+// Project map segment m[i..j] to contents of its elements
+function contents(m: Map<Int, Pair>, i: Int, j: Int)
+  returns (res: Map<K,OptionV>)
+  requires i <= j
+{
+  i < j ? contents(m, i + 1, j)[m[i].key := SomeV(m[i].val)] : empty_map()
+}
+
+lemma extend_right(m: Map<Int, Pair>, i: Int, j: Int)
+  requires i <= j
+  requires sorted_map_seg(m, i, j+1)
+  pure ensures contents(m, i, j)[m[j].key := SomeV(m[j].val)] == contents(m, i, j + 1)
+{
+  if (i < j) {
+    extend_right(m, i + 1, j);
+    swap_writes(contents(m, i+1, j), m[i], m[j]);
+  }
+}
+
+lemma contents_extend(m: Map<Int, Pair>, i: Int, j: Int)
+  requires i <= j
+  ensures contents(m, i, j)[m[j].key] == NoneV ==>
+    contents(m, i, j + 1) == contents(m, i, j)[m[j].key := SomeV(m[j].val)]
+  ensures contents(m, i, j)[m[j].key] != NoneV ==>
+    contents(m, i, j + 1) == contents(m, i, j)
+{
+  if (i < j) {
+    contents_extend(m, i + 1, j);
+    if (contents(m, i + 1, j)[m[j].key] != NoneV) {
+      return;
+    } else {
+      contents_extend(m, i + 1, j);
+      pure assert contents(m, i, j + 1) == contents(m, i + 1, j + 1)[m[i].key := SomeV(m[i].val)];
+      return;
+    }
+  } else {
+    pure assert contents(m, i, j) == empty_map;
+    return;
+  }
+}
+
+lemma contents_split(m: Map<Int, Pair>, i: Int, j: Int, k: Int)
+  requires i <= j <= k
+  ensures contents(m, i, k) == append(contents(m, i, j), contents(m, j, k))
+{
+  if (i < j) {
+  contents_split(m, i, j - 1, k);
+  contents_extend(m, i, j - 1);
+  if (contents(m, i, j - 1)[m[j - 1].key] == NoneV) {
+    append_none(contents(m, i, j - 1), contents(m, j, k), m[j - 1]);
+  } else {
+    pure assert contents(m, i, j) == contents(m, i, j - 1);
+    pure assert contents(m, i, k) == append(contents(m, i, j), contents(m, j - 1, k));
+    pure assert forall k1: K :: contents(m, i, k)[k1] == append(contents(m, i, j), contents(m, j, k))[k1] with {
+      if (contents(m, i, j)[k1] == NoneV) {
+        pure assert contents(m, j - 1, k)[k1] == contents(m, j, k)[m[j - 1].key := SomeV(m[j - 1].val)][k1];
+      }
+    }
+  }
+  } else {
+    append_empty_left(contents(m, j, k));
+  }
+}
+
+
+lemma contents_extensional2(m1: Map<Int, Pair>, m2: Map<Int, Pair>, i1: Int, j1: Int, i2: Int, j2: Int)
+  requires j1 - i1 == j2 - i2;
+  requires forall k: Int :: 0 <= k < j1 - i1 ==> m1[i1 + k] == m2[i2 + k];
+  ensures contents(m1, i1, j1) == contents(m2, i2, j2)
+{
+  if (i1 < j1) {
+    pure assert forall k: Int :: 0 <= k < j1 - (i1 + 1) ==> m1[(i1 + 1) + k] == m2[(i2 + 1) + k] with {
+      if (0 <= k < j1 - (i1 + 1)) {
+        pure assert 0 <= 1 + k < j1 - i1;
+        pure assert m1[i1 + (1 + k)] == m2[i2 + (1 + k)];
+      }
+    }
+    contents_extensional2(m1, m2, i1 + 1, j1, i2 + 1, j2);
+  }
+}
+
+lemma contents_extensional(m1: Map<Int, Pair>, m2: Map<Int, Pair>, i: Int, j: Int)
+  requires forall i1: Int :: i <= i1 < j ==> m1[i1] == m2[i1];
+  ensures contents(m1, i, j) == contents(m2, i, j)
+{
+  contents_extensional2(m1, m2, i, j, i, j);
+}
+
+lemma not_in_sorted_seg(m: Map<Int, Pair>, i: Int, j: Int, k: K)
+  requires sorted_map_seg(m, i, j)
+  ensures i >= j || lt(k, m[i].key) || lt(m[j-1].key, k) ==> contents(m, i, j)[k] == NoneV
+{
+  if (i >= j) {
+    pure assert contents(m, i, j) = empty_map();
+    return;
+  }
+  
+  if (lt(m[j - 1].key, k)) {
+    extend_right(m, i, j - 1);
+    not_in_sorted_seg(m, i, j - 1, k);
+    pure assert contents(m, i, j)[k] == contents(m, i+1, j)[m[i].key := SomeV(m[i].val)][k];
+    return;
+  }
+
+  if (lt(k, m[i].key)) {
+    not_in_sorted_seg(m, i + 1, j, k);
+    pure assert contents(m, i, j)[k] == contents(m, i+1, j)[m[i].key := SomeV(m[i].val)][k];
+    return;
+  }
+  
+}
+
+define sorted_map_seg(m, i, j)
+{
+  forall i1: Int, i2: Int :: i <= i1 < i2 < j ==> lt(m[i1].key, m[i2].key) @(noinst i1) @(noinst i2)
+}
+
+define sorted_array_prefix(a, len)
+{
+  acc(a) &*& 0 <= len <= a.length &*& sorted_map_seg(a.map, 0, len)
+}
+
+function map_find(m: Map<Int, Pair>, i: Int, j: Int, k: K) returns (idx: Int)
+  requires i <= j
+  requires sorted_map_seg(m, i, j)
+  ensures i <= idx <= j
+  ensures m[idx].key == k || idx == j || lt(k, m[idx].key)
+  ensures i < idx ==> lt(m[idx - 1].key, k)
+  ensures idx + 1 < j ==> lt(k, m[idx + 1].key)
+{
+  i < j && lt(m[i].key, k) ? map_find(m, i + 1, j, k) : i
+}
+ 
+
+lemma map_find_contents(m: Map<Int, Pair>, i: Int, j: Int, idx: Int, k: K)
+  requires i <= j
+  requires sorted_map_seg(m, i, j)
+  requires idx == map_find(m, i, j, k)
+  
+  ensures contents(m, i, idx)[k] == NoneV
+  ensures contents(m, idx + 1, j)[k] == NoneV
+{
+  // prove k !in contents(a, 0, idx)
+  not_in_sorted_seg(m, i, idx, k);
+  // prove: k !in contents(a, idx + 1, len)
+  not_in_sorted_seg(m, idx + 1, j, k);
+}
+
+
+lemma map_find_in_contents(m: Map<Int, Pair>, i: Int, j: Int, k: K)
+  requires i <= j
+  requires sorted_map_seg(m, i, j)
+  ensures contents(m, i, j)[k] != NoneV ==> map_find(m, i, j, k) < j && m[map_find(m, i, j, k)].key == k && contents(m, i, j)[k] == SomeV(m[map_find(m, i, j, k)].val)
+  ensures contents(m, i, j)[k] == NoneV ==> map_find(m, i, j, k) == j || lt(k, m[map_find(m, i, j, k)].key)
+{
+  var idx := map_find(m, i, j, k);
+  map_find_contents(m, i, j, idx, k);
+  contents_split(m, i, idx, j);
+  if (idx < j) {
+    extend_right(m, i, idx);
+    append_write_left(contents(m, i, idx), contents(m, idx + 1, j), m[idx]);
+    contents_split(m, i, idx + 1, j);
+  }
+}
+
+
+/** Actual library */
+
+
+// Find key `k` in sorted array segment `a[0..len]` (EXLUDING a[len]) using binary search
+procedure arr_find(a: Array<Pair>, len: Int, k: K)
+  returns (v: OptionV, idx: Int)
+  requires sorted_array_prefix(a, len)
+  requires 0 <= len <= a.length
+  ensures sorted_array_prefix(a, len)
+  ensures a.map == old(a.map)
+  // what we actually care about
+  ensures idx == map_find(a.map, 0, len, k)
+  ensures v == contents(a.map, 0, len)[k]
+  ensures v != NoneV ==> 0 <= idx < len && a[idx].key == k
+  ensures v == NoneV ==> (idx == len || lt(k, a[idx].key))
+{
+  ghost var am := a.map;
+  var lo := 0;
+  var hi := len;
+  
+  while (hi != lo)
+    invariant sorted_array_prefix(a, len)
+    invariant a.map == am
+    // what we actually care about
+    invariant 0 <= lo <= hi <= len <= a.length
+    invariant hi == len || a.map[lo].key == k || lt(k, a.map[hi].key)
+    invariant 0 < lo ==> lt(a.map[lo - 1].key, k)
+    invariant hi < len - 1 ==> lt(k, a.map[hi + 1].key)
+  {
+    var mid := (hi + lo) / 2;
+    var cmp: Int;
+    cmp := compare(k, a[mid].key);
+    if (cmp < 0) {
+      hi := mid;      // look in first half
+    } else if (cmp > 0) {
+      lo := mid + 1;    // look in second half
+    } else {
+      // found it
+      hi := mid;
+      lo := mid;
+    }
+  }
+  
+  idx := lo;
+  
+  if (idx == len || lt(k, a[lo].key)) {
+    v := NoneV;
+  } else {
+    v := SomeV(a[idx].val);
+  }
+
+  map_find_in_contents(a.map, 0, len, k);
+}
+
+// Given a sorted array segment `a[0..len]`,
+// insert `k` into `a[0..len+1]` while preserving sortedness.
+// If `k` is already contained in `a[0..len]`, then do not modify `a`.
+procedure arr_insert(a: Array<Pair>, p: Pair, len: Int)
+  returns (idx: Int, new_len: Int)
+  requires sorted_array_prefix(a, len)
+  requires len < a.length
+  ensures sorted_array_prefix(a, new_len)
+  ensures idx == map_find(old(a.map), 0, len, p.key)
+  ensures contents(a.map, 0, new_len) == contents(old(a.map), 0, len)[p.key := SomeV(p.val)];
+  ensures contents(old(a.map), 0, len)[p.key] != NoneV ==> new_len == len && a.map == old(a.map)[idx := p]
+  ensures contents(old(a.map), 0, len)[p.key] == NoneV ==> (new_len == len + 1
+    && a.map == map_shift(old(a.map), idx, idx + 1, len - idx)[idx := p])
+  ensures a[idx] == p
+{
+  // find position for insertion
+  var i: Int, v: OptionV;
+  var k := p.key;
+  
+  v, i := arr_find(a, len, k);
+
+  map_find_in_contents(a.map, 0, len, k);
+  
+  // k already in C?
+  if (v != NoneV) {
+    a[i] := p;
+    contents_split(a.map, 0, i, len);
+    contents_split(old(a.map), 0, i, len);
+    contents_extensional(a.map, old(a.map), 0, i);
+    contents_extensional(a.map, old(a.map), i + 1, len);
+    not_in_sorted_seg(a.map, 0, i, p.key);
+    append_write(contents(old(a.map), 0, i), contents(old(a.map), i, len), p, p);
+
+    pure assert contents(old(a.map), i + 1, len)[p.key := SomeV(p.val)] == contents(a.map, i, len)[p.key := SomeV(p.val)];
+    pure assert contents(old(a.map), i + 1, len)[p.key := SomeV(p.val)] == contents(old(a.map), i, len)[p.key := SomeV(p.val)];
+      
+    append_none(contents(old(a.map), 0, i), contents(a.map, i, len), p);
+
+    return i, len;
+  }
+
+  arr_shift(a, i, i + 1, len - i);
+
+  ghost var ms := a.map;
+  
+  a[i] := p;
+
+  ghost var i1 : Int;
+
+  pure assert forall i1: Int :: a.map[i1] == ms[i := p][i1] with {
+    if (i1 == i) pure assert a.map[i1] == p;
+    else pure assert a.map[i1] == ms[i1];
+  }
+
+  pure assert forall i1: Int, i2: Int :: 0 <= i1 < i2 < len + 1 ==> lt(a.map[i1].key, a.map[i2].key) with {
+    if (i1 < i || (i + 1) + (len - i) <= i1) {
+      pure assert a.map[i1] == old(a.map)[i1];
+    } else if (i < i1) {
+      pure assert a.map[i1] == old(a.map)[i + (i1 - (i + 1))];
+    }
+    if (i2 < i || (i + 1) + (len - i) <= i2) {
+      pure assert a.map[i2] == old(a.map)[i2];
+    } else if (i < i2) {
+      pure assert a.map[i2] == old(a.map)[i + (i2 - (i + 1))];
+    }
+  }
+
+  pure assert contents(a.map, 0, len + 1) == contents(old(a.map), 0, len)[p.key := SomeV(p.val)] with {
+    contents_split(a.map, 0, i + 1, len + 1);
+    contents_split(old(a.map), 0, i, len);
+    contents_extensional(a.map, old(a.map), 0, i);
+
+    pure assert forall k: Int :: 0 <= k < (len + 1) - (i + 1) ==> a.map[(i + 1) + k] == old(a.map)[i + k] with {
+      if (0 <= k < (len + 1) - (i + 1)) {
+        pure assert a.map[(i + 1) + k] == old(a.map)[i + (((i + 1) + k) - (i + 1))];
+      }
+    }   
+    contents_extensional2(a.map, old(a.map), i + 1, len + 1, i, len);
+
+    not_in_sorted_seg(a.map, 0, i, p.key);
+    contents_extend(a.map, 0, i);          
+
+    append_write_left(contents(a.map, 0, i), contents(a.map, i + 1, len + 1), p);
+  }
+  
+  return i, len + 1;
+}
+
+// Merge two sorted arrays a and b into a sorted array c such that
+// the resulting contents of c appends the contents of a and b.
+procedure arr_merge(a: Array<Pair>, alen: Int, b: Array<Pair>, blen: Int, c: Array<Pair>)
+  returns (clen: Int)
+  requires sorted_array_prefix(a, alen)
+  requires sorted_array_prefix(b, blen)
+  requires acc(c)
+  requires alen + blen <= c.length
+  ensures sorted_array_prefix(a, alen)
+  ensures sorted_array_prefix(b, blen)
+  ensures sorted_array_prefix(c, clen)
+  ensures contents(c.map, 0, clen) == append(contents(old(a.map), 0, alen), contents(old(b.map), 0, blen))
+{
+  var ai := 0;
+  var bi := 0;
+  var ci := 0;
+
+  pure assert contents(a.map, 0, ai) == empty_map;
+  pure assert contents(b.map, 0, bi) == empty_map;
+  pure assert contents(c.map, 0, ci) == empty_map;
+  append_empty_left(contents(a.map, 0, ai));
+  
+  while (ai < alen || bi < blen)
+    invariant 0 <= ai <= alen
+    invariant 0 <= bi <= blen
+    invariant 0 <= ci <= ai + bi
+    invariant ci == 0 ==> ai == 0 && bi == 0
+    invariant alen + blen <= c.length
+    invariant alen == old(alen)
+    invariant blen == old(blen)
+    invariant sorted_array_prefix(a, alen)
+    invariant sorted_array_prefix(b, blen)
+    invariant sorted_array_prefix(c, ci)
+    invariant ci > 0 && ai > 0 ==> le(a[ai - 1].key, c[ci - 1].key)
+    invariant ci > 0 && bi > 0 ==> le(b[bi - 1].key, c[ci - 1].key)
+    invariant ci > 0 && ai < alen ==> lt(c[ci - 1].key, a[ai].key)
+    invariant ci > 0 && bi < blen ==> lt(c[ci - 1].key, b[bi].key)
+    invariant a.map == old(a.map)
+    invariant b.map == old(b.map)
+    invariant contents(c.map, 0, ci) == append(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi))
+  {
+    var p: Pair;
+    ghost var cmap := c.map;  
+    if (ai < alen) {
+      not_in_sorted_seg(old(a.map), 0, ai, b[bi].key);
+      if (bi < blen) {
+        not_in_sorted_seg(old(b.map), 0, bi, b[bi].key);
+        if (lt(b[bi].key, a[ai].key)) {
+          p := b[bi];
+          c[ci] := p;
+
+          contents_extend(old(b.map), 0, bi);
+          append_none(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi), p);
+          append_write_left(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi), p);
+
+          bi := bi + 1;
+          assert sorted_array_prefix(a, alen) &*& sorted_array_prefix(b, blen) &*& sorted_array_prefix(c, ci + 1);
+        } else {
+          p := a[ai];
+          c[ci] := p;
+
+          contents_extend(old(a.map), 0, ai);
+          append_none(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi), p);
+          append_write_left(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi), p);
+
+          if (a[ai].key == b[bi].key) {
+            contents_extend(old(b.map), 0, bi);
+            append_write(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi), a[ai], b[bi]);
+            bi := bi + 1;
+          }
+          
+          ai := ai + 1;
+          assert sorted_array_prefix(a, alen) &*& sorted_array_prefix(b, blen) &*& sorted_array_prefix(c, ci + 1);
+        }
+      } else {
+        p := a[ai];
+        c[ci] := p;
+
+        contents_extend(old(a.map), 0, ai);
+        append_none(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi), p);
+        append_write_left(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi), p);
+
+        ai := ai + 1;
+        assert sorted_array_prefix(a, alen) &*& sorted_array_prefix(b, blen) &*& sorted_array_prefix(c, ci + 1);
+      }
+    } else {
+      p := b[bi];
+      c[ci] := p;
+
+      contents_extend(old(b.map), 0, bi);
+      append_none(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi), p);
+      append_write_left(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi), p);
+
+      bi := bi + 1;
+      assert sorted_array_prefix(a, alen) &*& sorted_array_prefix(b, blen) &*& sorted_array_prefix(c, ci + 1);
+    }
+    not_in_sorted_seg(c.map, 0, ci, p.key);
+    contents_extensional(c.map, cmap, 0, ci);
+    contents_extend(c.map, 0, ci);
+    pure assert contents(c.map, 0, ci + 1) == append(contents(old(a.map), 0, ai), contents(old(b.map), 0, bi));
+    ci := ci + 1;
+  }
+  return ci;
+}
+
+lemma append_contents_extend_left(m1: Map<Int, Pair>, i: Int, j: Int, m2: Map<K, OptionV>)
+  requires i-1 < j
+  ensures append(contents(m1, i-1, j), m2) == append(contents(m1, i, j), m2)[m1[i-1].key := SomeV(m1[i-1].val)]
+{
+  pure assert i-1 < j;
+  pure assert contents(m1, i-1, j) == contents(m1, i, j)[m1[i-1].key := SomeV(m1[i-1].val)];
+  append_write_left(contents(m1, i, j), m2, pair(m1[i-1].key, m1[i-1].val));
+}  
+
+// Merge unsorted array a[start..end] into sorted array b
+procedure flush(a: Array<Pair>, start: Int, end: Int, b: Array<Pair>, blen: Int) returns (blen1: Int)
+  requires acc(a)
+  requires sorted_array_prefix(b, blen)
+  requires 0 <= start <= end <= a.length
+  requires blen + end < b.length
+  ensures a.map == old(a.map)
+  ensures acc(a)
+  ensures sorted_array_prefix(b, blen1)
+  ensures contents(b.map, 0, blen1) == append(contents(old(a.map), start, end), contents(old(b.map), 0, blen))
+{
+  var i := end - 1;
+  blen1 := blen;
+
+  pure assert contents(old(a.map), i + 1, end) == empty_map;
+  append_empty_left(contents(old(b.map), 0, blen));
+  pure assert contents(b.map, 0, blen1) == append(contents(old(a.map), i + 1, end), contents(old(b.map), 0, blen));
+
+  while (start <= i) 
+    invariant acc(a)
+    invariant sorted_array_prefix(b, blen1)
+    invariant -1 <= start-1 <= i < end
+    invariant blen1 + i <= blen + end < b.length
+    invariant a.map == old(a.map)
+    invariant contents(b.map, 0, blen1) == append(contents(old(a.map), i + 1, end), contents(old(b.map), 0, blen))
+  {
+    ghost var bmap := b.map;
+    ghost var blen_i := blen1;
+    ghost var c := contents(bmap, 0, blen_i); 
+    
+    var idx1, new_blen := arr_insert(b, a[i], blen1);
+    blen1 := new_blen;
+    i := i - 1;
+
+    pure assert c == append(contents(old(a.map), i+2, end), contents(old(b.map), 0, blen));
+
+    pure assert contents(b.map, 0, blen1) == c[a[i+1].key := SomeV(a[i+1].val)];
+    
+    append_contents_extend_left(old(a.map), i+2, end, contents(old(b.map), 0, blen));
+  }
+
+  pure assert contents(b.map, 0, blen1) == append(contents(old(a.map), start, end), contents(old(b.map), 0, blen));
+
+}
+
+  

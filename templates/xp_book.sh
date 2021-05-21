@@ -40,13 +40,16 @@ make clean
 rm -f $loctotalfile $timestotalfile $outputfile
 
 echo -e "% Module\t\t& Code\t& Proof\t& Total\t& Time" >> $outputfile
-run "Flow library" "flows/gmap_more flows/ccm flows/flows flows/multiset_flows"
-run "Single-copy flows" "single_copy/inset_flows single_copy/keyset_ra single_copy/lock single_copy/auth_ext single_copy/search_str"
-run "Single-node template" "single_copy/single_node"
-run "Two-node template" "single_copy/two_node"
+run "Flow Library" "flows/gmap_more flows/ccm flows/flows flows/multiset_flows"
+run "Lock Implementation" "util/auth_ext util/lock"
+echo -e "Single-copy:" >> $outputfile
 run "Link template" "single_copy/link"
 run "Give-up template" "single_copy/give_up"
 run "Lock-coupling template" "single_copy/coupling"
+echo -e "Multicopy:" >> $outputfile
+run "Client-level Spec" "util/one_shot_proph util/typed_proph multicopy/multicopy multicopy/multicopy_util multicopy/multicopy_client_level"
+run "LSM DAG Template" "multicopy/multicopy_lsm multicopy/multicopy_lsm_util multicopy/multicopy_lsm_search multicopy/multicopy_lsm_upsert multicopy/multicopy_lsm_compact"
+run "DF Template" "multicopy/multicopy_df multicopy/multicopy_df_search multicopy/multicopy_df_upsert"
 
 echo -e "\\hline" >> $outputfile
 echo -n -e "Total\t\t" >> $outputfile

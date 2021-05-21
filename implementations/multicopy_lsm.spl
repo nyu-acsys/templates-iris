@@ -1,0 +1,538 @@
+options "-simplearrays -propreads -module multicopy_lsm"
+
+include "array_map.spl"
+
+type V = Int
+
+/* File system model */
+
+// Representation of a write-once file
+struct FileT {
+  var ram:  Array<Pair>; // file contents is mapped to a RAM disk in memory
+  ghost var disk_cont: Array<Pair>; // actual contents on disk
+  var is_new: Bool; // indicates whether file has not yet been written
+  var is_open: Bool; // indicates whether RAM disk has been populated
+  var size: Int; // The size of the file
+}
+
+define FilePure(f, isn, iso, len) {
+  len == f.size
+    && len == f.ram.length
+    && isn == f.is_new && iso == f.is_open
+    && len == f.disk_cont.length
+}
+
+// Abstract predicate describing a file
+define File(f, isn, iso, len) {
+  acc(f) &*& acc(f.disk_cont) &*& acc(f.ram) &*&
+    FilePure(f, isn, iso, len)
+}
+
+// Delete the given file
+procedure deleteFile(f: FileT,
+    implicit ghost isn: Bool, implicit ghost iso: Bool, implicit ghost len: Int)
+  requires File(f, isn, iso, len)
+  ensures emp
+{
+  free f.ram;
+  free f.disk_cont;
+  free f;
+}
+
+// Create a new file of the given size
+procedure createFile(len: Int) returns (f: FileT)
+  requires len >= 0
+  ensures File(f, true, false, len)
+{
+  f := new FileT();
+  f.ram := new Array<Pair>(len);
+  f.disk_cont := new Array<Pair>(len);
+  f.is_new := true;
+  f.is_open := false;
+  f.size := len;
+  return f;
+}
+
+// Close the given file
+procedure closeFile(f: FileT,
+    implicit ghost isn: Bool, implicit ghost len: Int)
+  requires len >= 0
+  requires File(f, isn, true, len)
+  ensures File(f, isn, false, len)
+  ensures f.disk_cont.map == old(f.disk_cont.map)
+{
+  f.is_open := false;
+}
+
+// Open the given file
+procedure openFile(f: FileT, implicit ghost isn: Bool, implicit ghost len: Int)
+  requires File(f, isn, false, len)
+  ensures File(f, isn, true, len)
+  ensures f.ram.map == f.disk_cont.map
+  ensures old(f.disk_cont.map) == f.disk_cont.map
+{
+  arr_copy(f.disk_cont, f.ram, 0, 0, f.size);
+  f.is_open := true;
+}
+
+// Write the contents of the memory-mapped RAM disk to the file system
+procedure writeFile(f: FileT, implicit ghost len: Int)
+  requires File(f, true, true, len)
+  ensures File(f, false, true, len)
+  ensures f.ram.map == old(f.ram.map)
+  ensures f.disk_cont.map == f.ram.map
+{
+  arr_copy(f.ram, f.disk_cont, 0, 0, f.size);
+  f.is_new := false;
+}
+
+// Test whether file is open
+procedure isOpenFile(f: FileT,
+  implicit ghost isn: Bool, implicit ghost iso: Bool, implicit ghost len: Int)
+  returns (res: Bool)
+  requires File(f, isn, iso, len)
+  ensures File(f, isn, iso, len)
+  ensures iso ==> f.ram.map == old(f.ram.map)
+  ensures f.disk_cont.map == old(f.disk_cont.map)
+  ensures res == iso
+{
+  return f.is_open;
+}
+
+
+/** LSM-like implementation of the multicopy template. */
+
+datatype OptionNode = someNode(nd: Node) | noneNode
+
+/** Definition of a node */
+
+datatype NodeType = memtableNode | sstableNode
+
+struct Node {
+  var nodeType: NodeType;
+  var table: Array<Pair>;
+  var tableLen: Int;
+  var next: Node;
+  var file: FileT;
+}
+
+const B: Int
+
+axiom B > 1
+
+/** {Spec} Definition of heap representation predicate, node */
+
+define nodeSpatial(x) {
+  acc(x)
+}
+
+define nodeSpatialFull(x) {
+  nodeSpatial(x) &*&
+    (x.nodeType == memtableNode &*& acc(x.table) || x.nodeType != memtableNode &*& File(x.file, x.file.is_new, x.file.is_open, x.file.ram.length))
+}
+
+define nodePure(r, n, esn, Cn) {
+  true
+  // Node is either memtable or sstable:
+  && (n.nodeType == memtableNode
+      && n == r
+      && Cn == contents(n.table.map, n.table.length - n.tableLen, n.table.length)
+      && 0 <= n.tableLen <= n.table.length
+    || n.nodeType == sstableNode
+      && n != r
+      && sorted_map_seg(n.file.disk_cont.map, 0, n.tableLen)
+      // Cn is given by table
+      && Cn == contents(n.file.disk_cont.map, 0, n.tableLen)
+      && (n.file.is_open ==> n.file.ram.map == n.file.disk_cont.map)
+      && 0 <= n.tableLen <= n.file.disk_cont.length
+  )
+  // No self-loops
+  && n.next != n && n.next != r
+  // Edgeset to next node is entire keyspace if non-null
+  && (n.next != null
+    ==> (forall k: K :: k in esn[n.next]))
+  // All other nodes have empty edgeset
+  && (forall n1: Node :: n1 != n.next ==> esn[n1] == {})
+  && esn[null] == {}
+}
+
+// TODO make n first or last arg
+define node(r, n, esn, Cn) {
+  nodeSpatialFull(n)
+  &*& nodePure(r, n, esn, Cn)
+}
+
+define needsNewNode(r, n, esn, Cn) {
+  n.next == null
+}
+
+/** {Spec} Functions used in specs connecting to Iris template proof. */
+
+function dom(C: Map<K, OptionV>) returns (res: Set<K>) {
+  { k: K :: C[k] != NoneV ? true : false}
+}
+
+function set_of_map(C: Map<K, OptionV>) returns (res: Set<Pair>) {
+  { p: Pair :: C[p.key] == SomeV(p.val) ? true : false }
+}
+
+function merge(Cn: Map<K, OptionV>, Es: Set<K>, Cm: Map<K, OptionV>)
+  returns (res: Map<K, OptionV>)
+{
+  { k: K :: Cn[k] != NoneV ? Cn[k] : (k in Es ? Cm[k] : NoneV) }
+}
+
+/** {Spec} Some lemmas used by the proof of the programs below */
+
+lemma merge_equals_append(Cn: Map<K, OptionV>, Es: Set<K>, Cm: Map<K, OptionV>)
+  requires forall k: K :: k in Es
+  ensures merge(Cn, Es, Cm) == append(Cn, Cm)
+{
+  pure assert forall k: K :: merge(Cn, Es, Cm)[k] == append(Cn, Cm)[k] with {
+    if (Cn[k] == NoneV) {
+      pure assert merge(Cn, Es, Cm)[k] == Cm[k];
+    }
+  }
+}
+
+lemma dom_empty_map()
+  ensures dom(empty_map) == {}
+{
+  pure assert forall k: K :: k !in dom(empty_map) with {
+    pure assert empty_map[k] == NoneV;
+  }
+}
+
+lemma set_of_empty_map()
+  ensures set_of_map(empty_map) == {}
+{
+  pure assert forall p: Pair :: p !in set_of_map(empty_map) with {
+    pure assert empty_map[p.key] == NoneV;
+  }
+}
+
+lemma set_of_map_append(Cn: Map<K, OptionV>, Cm: Map<K, OptionV>)
+  ensures set_of_map(append(Cn, Cm)) subsetof set_of_map(Cn) ++ set_of_map(Cm)
+{
+  pure assert forall p: Pair :: p in set_of_map(append(Cn, Cm)) ==>
+    p in set_of_map(Cn) || p in set_of_map(Cm) with {
+    if (Cn[p.key] == NoneV) {
+      pure assert append(Cn, Cm)[p.key] == Cm[p.key];
+    }       
+  }
+}
+
+lemma dom_append_right(Cn: Map<K, OptionV>, Cm: Map<K, OptionV>)
+  ensures dom(Cm) subsetof dom(append(Cn, Cm))
+{
+  pure assert forall k: K :: k in dom(Cm) ==> k in dom(append(Cn, Cm)) with {
+    if (Cn[k] == NoneV) {
+      pure assert append(Cn, Cm)[k] == Cm[k];
+    }       
+  }
+}
+
+
+/** {Spec} Implementation-specific lemmas needed by Iris */
+
+lemma node_sep_star(r: Node, n: Node, esn: Map<Node, Set<K>>, es1: Map<Node, Set<K>>, C: Map<K, OptionV>, C1: Map<K, OptionV>)
+  requires node(r, n, esn, C) &*& node(r, n, es1, C1)
+  ensures false
+{}
+
+lemma node_es_disjoint(r: Node, n: Node, esn: Map<Node, Set<K>>, C: Map<K, OptionV>)
+  requires node(r, n, esn, C)
+  ensures node(r, n, esn, C)
+  ensures forall k: K, n1: Node, n2: Node ::
+    n1 != n2 ==> (k !in esn[n1] || k !in esn[n2]) 
+{
+  pure assert forall k: K, n1: Node, n2: Node ::
+    n1 != n2 ==> (k !in esn[n1] || k !in esn[n2]) 
+  with {
+    if (n1 != n2) {
+      pure assert true;
+    }
+  }
+}
+
+lemma node_es_empty(r: Node, n: Node, esn: Map<Node, Set<K>>, C: Map<K, OptionV>)
+  requires node(r, n, esn, C)
+  ensures node(r, n, esn, C)
+  ensures forall k: K :: (k !in esn[r] && k !in esn[n])
+{}
+
+/** Begin programs */
+
+
+procedure init()
+  returns (r: Node, esr: Map<Node, Set<K>>, Cr: Map<K, OptionV>)
+  ensures node(r, r, esr, Cr)
+{
+  r := new Node;
+  r.table := new Array<Pair>(2*B);
+  r.tableLen := 0;
+  r.next := null;
+  r.nodeType := memtableNode;
+
+  esr := { n: Node :: {} };
+  Cr := empty_map;
+
+  return r, esr, Cr;
+}
+
+procedure inContents(r: Node, n: Node, k: K,
+    ghost esn: Map<Node, Set<K>>,
+    ghost Cn: Map<K, OptionV>)
+  returns (res: OptionV)
+  requires node(r, n, esn, Cn)
+  ensures node(r, n, esn, Cn)
+  ensures Cn[k] == res
+{
+  if (n.nodeType == memtableNode) {
+    var start := n.table.length - n.tableLen;
+    var i := start;
+    var flag := false;
+    while (i < n.table.length && !flag)
+      invariant n.nodeType == memtableNode;
+      invariant start == n.table.length - n.tableLen;
+      invariant node(r, n, esn, Cn)
+      invariant start <= i <= n.table.length
+      invariant flag ==> start <= i < n.table.length && n.table[i].key == k
+      invariant contents(n.table.map, start, i)[k] == NoneV
+    {
+      if (n.table[i].key == k) {
+        flag := true;
+      } else {
+        contents_extend(n.table.map, start, i);
+        i := i + 1;
+      }
+    }
+    if (flag) {
+      contents_split(n.table.map, start, i + 1, n.table.length);
+      contents_extend(n.table.map, start, i);
+      return SomeV(n.table[i].val);
+    } else {
+      return NoneV;
+    }
+  } else {
+    var f := n.file;
+    if (!isOpenFile(f)) {
+      openFile(f);
+    }
+    var v, i := arr_find(f.ram, n.tableLen, k);
+    return v;
+  }
+}
+
+procedure addContents(r: Node, n: Node, k: K, t: Int,
+   ghost esn: Map<Node, Set<K>>,
+   ghost Cn: Map<K, OptionV>)
+  returns (succ: Bool, implicit ghost Cn1: Map<K, OptionV>)
+  requires node(r, n, esn, Cn) &*& n == r
+  ensures node(r, n, esn, Cn1)
+  ensures (succ ==> Cn1 == Cn[k := SomeV(t)]) && (!succ ==> Cn1 == Cn)
+{
+  pure assert n.nodeType == memtableNode;
+  var start := n.table.length - n.tableLen;  
+  pure assert Cn == contents(n.table.map, start, n.table.length);
+
+  if (n.tableLen < n.table.length) {
+    n.table[start - 1] := pair(k,t);
+
+    contents_extensional(n.table.map, old(n.table.map), start, n.table.length);
+    
+    n.tableLen := n.tableLen + 1;
+
+    return true;
+  } else {
+    return false;
+  }
+}
+
+procedure findNext(r: Node, n: Node, k: K,
+    implicit ghost esn: Map<Node, Set<K>>,
+    implicit ghost Cn: Map<K, OptionV>)
+  returns (res: OptionNode)
+  requires node(r, n, esn, Cn)
+  ensures node(r, n, esn, Cn)
+  ensures res != noneNode ==> k in esn[res.nd]
+  ensures res == noneNode ==> (forall n1: Node :: k !in esn[n1])
+{
+  if (n.next == null) {  // Leaf node
+    return noneNode;
+  } else {
+    return someNode(n.next);
+  }
+}
+
+procedure atCapacity(r: Node, n: Node, implicit ghost esn: Map<Node, Set<K>>,
+    implicit ghost Cn: Map<K, OptionV>)
+  returns (b: Bool)
+  requires node(r, n, esn, Cn)
+  ensures node(r, n, esn, Cn)
+{
+  if (n.nodeType == memtableNode) {
+    if (n.tableLen < n.table.length) {
+      return false;
+    } else {
+      return true;
+    }
+  } else {
+    return true;
+  }
+}
+
+procedure chooseNext(r: Node, n: Node,
+    ghost esn: Map<Node, Set<K>>,
+    ghost Cn: Map<K, OptionV>)
+  returns (res: OptionNode)
+  requires node(r, n, esn, Cn)
+  ensures node(r, n, esn, Cn)
+  ensures res == noneNode ==> needsNewNode(r, n, esn, Cn)
+  ensures res != noneNode ==> esn[res.nd] != {}
+{
+  if (n.next != null) {
+    return someNode(n.next);
+  } else {
+    return noneNode;
+  }
+}
+
+procedure insertNode(r: Node, n: Node, m: Node,
+    ghost esn: Map<Node, Set<K>>,
+    ghost Cn: Map<K, OptionV>)
+  returns (ghost esn1: Map<Node, Set<K>>, ghost esm: Map<Node, Set<K>>, ghost Cm: Map<K, OptionV>)
+  requires node(r, n, esn, Cn) &*& nodeSpatial(m)
+  requires needsNewNode(r, n, esn, Cn) &*& m != r
+  ensures node(r, n, esn1, Cn) &*& node(r, m, esm, Cm)
+  ensures esn1[m] != {} && esn1 == esn[m := esn1[m]]
+  ensures esm == { x: Node :: {} } && Cm == empty_map
+{
+  pure assert n != m;
+  n.next := m;
+  esn1 := { x: Node :: x == m ? { k: K :: true } : {} };
+
+  m.tableLen := 0;
+  m.next := null;
+  m.nodeType := sstableNode;
+  m.file := createFile(2*B);
+  esm := { x: Node :: {} };
+  Cm := empty_map;
+  return esn1, esm, Cm;
+}
+
+procedure allocNode() returns (m: Node)
+  requires true
+  ensures nodeSpatial(m)
+{
+  m := new Node;
+}  
+
+
+procedure mergeContentsHelper(r: Node, n: Node, m: Node,
+    ghost esn: Map<Node, Set<K>>,
+    ghost Cn: Map<K, OptionV>,
+    ghost esm: Map<Node, Set<K>>,
+    ghost Cm: Map<K, OptionV>)
+  returns (implicit ghost Cm1: Map<K, OptionV>)
+  requires node(r, n, esn, Cn) &*& node(r, m, esm, Cm)
+  requires esn[m] != {}
+  ensures node(r, n, esn, empty_map) &*& node(r, m, esm, append(Cn, Cm))
+{
+  pure assert m != r;
+  if (n.nodeType == memtableNode) {
+    // n is root node: flush
+    var f := m.file;
+
+    if (!isOpenFile(f)) {
+      openFile(f);
+    }
+
+    var f_new := createFile(n.table.length + f.size + 1);
+    openFile(f_new);
+
+    arr_copy(f.ram, f_new.ram, 0, 0, f.ram.length);
+
+    contents_extensional(f.ram.map, f_new.ram.map, 0, m.tableLen);
+
+    var rlen := flush(n.table, n.table.length - n.tableLen, n.table.length, f_new.ram, m.tableLen);
+
+    writeFile(f_new);
+
+    contents_extensional(f_new.ram.map, f_new.disk_cont.map, 0, rlen);
+    
+    deleteFile(f);
+    m.file := f_new;
+    m.tableLen := rlen;
+
+    n.tableLen := 0;
+    
+    return;
+  } else {
+    // n and m are disk nodes: compact
+    var fn := n.file;
+    var fm := m.file;
+    
+    
+    if (!isOpenFile(fm)) {
+      openFile(fm);
+    }
+
+    if (!isOpenFile(fn)) {
+      openFile(fn);
+    }
+    
+    var fm_new := createFile(n.tableLen + m.tableLen + 1);
+    openFile(fm_new);
+
+    var rlen := arr_merge(fn.ram, n.tableLen, fm.ram, m.tableLen, fm_new.ram);
+
+    writeFile(fm_new);
+
+    deleteFile(fm);
+    m.file := fm_new;
+    m.tableLen := rlen;
+
+    var fn_new := createFile(n.file.size);
+    openFile(fn_new);
+
+    writeFile(fn_new);
+
+    deleteFile(fn);
+    n.file := fn_new;
+    n.tableLen := 0;
+
+    return;
+  }
+}
+
+procedure mergeContents(r: Node, n: Node, m: Node,
+    ghost esn: Map<Node, Set<K>>,
+    ghost Cn: Map<K, OptionV>,
+    ghost esm: Map<Node, Set<K>>,
+    ghost Cm: Map<K, OptionV>)
+  returns (implicit ghost Cn1: Map<K, OptionV>, implicit ghost Cm1: Map<K, OptionV>)
+  requires node(r, n, esn, Cn) &*& node(r, m, esm, Cm)
+  requires esn[m] != {}
+  ensures node(r, n, esn, Cn1) &*& node(r, m, esm, Cm1)
+  ensures set_of_map(Cn1) subsetof set_of_map(Cn)
+  ensures set_of_map(Cm1) subsetof set_of_map(Cn) ++ set_of_map(Cm)
+  ensures Disjoint(set_of_map(Cn) ** set_of_map(Cm1), set_of_map(Cn1))
+  ensures dom(Cm) subsetof dom(Cm1)
+  ensures merge(Cn, esn[m], Cm) == merge(Cn1, esn[m], Cm1)
+{
+  mergeContentsHelper(r, n, m, esn, Cn, esm, Cm);
+
+  // Some ghost code to relate to spec assumed in Iris proof
+  ghost var Cm11 := append(Cn, Cm);
+  ghost var Cn11 := empty_map;
+  pure assert merge(Cn, esn[m], Cm) == merge(Cn11, esn[m], Cm11) with {
+    merge_equals_append(Cn11, esn[m], Cm11);
+    merge_equals_append(Cn, esn[m], Cm);
+    append_empty_left(Cm11);
+  }
+  dom_empty_map();
+  set_of_empty_map();
+  set_of_map_append(Cn, Cm);
+  dom_append_right(Cn, Cm);
+}

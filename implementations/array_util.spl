@@ -412,7 +412,7 @@ procedure arr_copy_node(a: Array<Node>, b: Array<Node>, src: Int, dst: Int, len:
   }
 }
 
-// Find key `k` in sorted array segment `a[0..len]` using binary search
+// Find key `k` in sorted array segment `a[0..len]` (EXLUDING a[len]) using binary search
 procedure arr_find(a: Array<K>, len: Int, k: K)
   returns (found: Bool, idx: Int)
   requires sorted_array_prefix(a, len)
@@ -422,6 +422,8 @@ procedure arr_find(a: Array<K>, len: Int, k: K)
   // what we actually care about
   ensures idx == map_find(a.map, 0, len, k)
   ensures found == (k in set_of_map(a.map, 0, len))
+  ensures found ==> 0 <= idx < len && a[idx] == k
+  ensures !found ==> (idx == len || lt(k, a[idx]))
 {
   ghost var am := a.map;
   var lo := 0;
@@ -524,3 +526,5 @@ procedure arr_delete(a: Array<K>, k: K, len: Int)
   
   return len - 1, idx;
 }
+
+

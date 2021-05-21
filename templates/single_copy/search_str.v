@@ -20,8 +20,8 @@ Inductive dOp := searchOp | insertOp | deleteOp.
 Definition Ψ dop k (C: gsetO K) (C': gsetO K) (res: bool) :=
   match dop with
   | searchOp => C' = C ∧ (if res then k ∈ C else k ∉ C)
-  | insertOp => C' = union C {[k]} ∧ (if res then k ∉ C else k ∈ C)
-  | deleteOp => C' = difference C {[k]} ∧ (if res then k ∈ C else k ∉ C)
+  | insertOp => C' = C ∪ {[k]} ∧ (if res then k ∉ C else k ∈ C)
+  | deleteOp => C' = C ∖ {[k]} ∧ (if res then k ∈ C else k ∉ C)
   end.
 
 Lemma Ψ_impl_C_in_K dop k C C' res (Ks: gset K) :

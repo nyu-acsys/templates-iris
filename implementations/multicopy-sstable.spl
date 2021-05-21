@@ -1,0 +1,168 @@
+options "-abspreds -simplearrays -propreads -stratify"
+
+include "array_util.spl"
+
+datatype OptionTS = someTS(tst: Int) | noneTS
+
+datatype OptionNode = someNode(nd: Node) | noneNode
+
+struct Node {
+  var len: Int;
+  var keys: Array<K>;
+  var ptrs: Array<Node>;
+  ghost var indices: Map<Node, Int>;
+  var tableK: Array<K>;
+  var tableT: Array<Int>;
+  var tableLen: Int;
+}
+
+const B: Int
+
+axiom B > 1
+
+
+define hrepSpatial(x) {
+  acc(x) &*& acc(x.keys) &*& acc(x.ptrs) &*& acc(x.tableK) &*& acc(x.tableT)
+  &*& x.keys.length == 2*B &*& x.ptrs.length == 2*B
+  &*& x.tableK.length == x.tableT.length
+  &*& x.tableK.length == 2*B
+}
+
+define nodePure(r, n, es, Cn) {
+  true
+  && 0 <= n.tableLen <= n.tableK.length
+  && sorted_map_seg(n.tableK.map, 0, n.tableLen) == true
+  && (forall i: Int :: 0 <= i < n.tableLen ==> Cn[n.tableK[i]] == n.tableT[i])
+  && (n.ptrs[0] == null  // Leaf
+      && (forall n1: Node :: es[n1] == {})
+    || n.ptrs[0] != null  // Internal
+      && (forall i: Int :: 0 <= i <= n.len ==> n != n.ptrs[i])
+      && (forall i: Int, j: Int :: 0 <= i < j <= n.len ==> n.ptrs[i] != n.ptrs[j]
+        @(noinst i) @(noinst j))
+      && (forall i: Int :: 0 <= i <= n.len ==> n.ptrs[i] != null)
+      && (forall i: Int, k: K :: 0 <= i <= n.len ==>
+        (k in es[n.ptrs[i]]
+          && (0 < i ==> le(n.keys[i-1], k)) && (i < n.len ==> lt(k, n.keys[i]))
+        || k !in es[n.ptrs[i]]
+          && !((i <= 0 || le(n.keys[i-1], k)) && (i >= n.len || lt(k, n.keys[i]))))
+        @(matching n.ptrs[i] yields n.keys[i - 1])
+        @(matching n.ptrs[i] yields n.keys[i]))
+      && (forall n1: Node :: n.indices[n1] == -1 ==> es[n1] == {})
+  )
+  // Keys are sorted
+  && sorted_map_seg(n.keys.map, 0, n.len) == true
+  && 0 <= n.len <= n.keys.length
+  // Indices of outgoing pointers are stored in n.indices
+  && (forall y: Node :: 0 <= n.indices[y] <= n.len
+    ==> n.ptrs.map[n.indices[y]] == y)
+  && (forall i: Int :: n.ptrs[0] != null && 0 <= i <= n.len
+    ==> n.indices[n.ptrs.map[i]] == i @(noinst i))
+  && (forall y: Node :: -1 <= n.indices[y] <= n.len)
+  && (n.ptrs[0] == null ==> (forall y: Node :: n.indices[y] == -1 @(noinst y)))
+  && n.indices[n] == -1
+  && n.indices[r] == -1
+}
+
+define node(r, n, es, Cn) {
+  hrepSpatial(n)
+  &*& nodePure(r, n, es, Cn)
+}
+
+lemma node_sep_star(r: Node, n: Node, es: Map<Node, Set<K>>, es1: Map<Node, Set<K>>, C: Map<K, Int>, C1: Map<K, Int>)
+  requires node(r, n, es, C) &*& node(r, n, es1, C1)
+  ensures false
+{}
+
+lemma node_es_disjoint(r: Node, n: Node, es: Map<Node, Set<K>>, C: Map<K, Int>)
+  requires node(r, n, es, C)
+  ensures node(r, n, es, C)
+  ensures forall k: K, n1: Node, n2: Node ::
+    n1 != n2 ==> (k !in es[n1] || k !in es[n2]) 
+{
+  pure assert forall k: K, n1: Node, n2: Node ::
+    n1 != n2 ==> (k !in es[n1] || k !in es[n2]) 
+  with {
+    if (n1 != n2) {
+      if (n.indices[n1] > -1) {
+        if (n.indices[n2] > -1) {
+          pure assert n.ptrs[n.indices[n1]] == n1 && n.ptrs[n.indices[n2]] == n2;
+          if (n.indices[n1] == n.indices[n2]) {
+            pure assert false;
+          } else {
+            pure assert (k !in es[n.ptrs[n.indices[n1]]]
+              || k !in es[n.ptrs[n.indices[n2]]]);
+          }
+        }
+      }
+    }
+  }
+}
+
+lemma node_es_empty(r: Node, n: Node, es: Map<Node, Set<K>>, C: Map<K, Int>)
+  requires node(r, n, es, C)
+  ensures node(r, n, es, C)
+  ensures forall k: K :: (k !in es[r] && k !in es[n])
+{
+}  
+
+
+procedure init()
+  returns (r: Node, es: Map<Node, Set<K>>, Cr: Map<K, Int>)
+  ensures node(r, r, es, Cr)
+{
+  r := new Node;
+  r.keys := new Array<K>(2*B);
+  r.ptrs := new Array<Node>(2*B);
+  r.indices := { n: Node :: -1 };
+  r.tableK := new Array<K>(2*B);
+  r.tableT := new Array<Int>(2*B);
+  arr_init_node(r.ptrs, 2*B, null);
+  r.len := 0;
+  r.tableLen := 0;
+
+  es := { n: Node :: {} };
+  Cr := { k: K :: 0 };
+
+  return r, es, Cr;
+}
+
+procedure inContents(n: Node, k: K,
+    ghost r: Node, ghost es: Map<Node, Set<K>>, ghost Cn: Map<K, Int>)
+  returns (res: OptionTS)
+  requires node(r, n, es, Cn)
+  ensures node(r, n, es, Cn)
+  ensures res != noneTS ==> Cn[k] == res.tst
+  // TODO make Cn Map<K, OptionTS> instead of:
+  ensures res == noneTS ==> (forall j: Int :: 0 <= j < n.tableLen ==> n.tableK[j] != k)
+{
+  var b, i := arr_find(n.tableK, n.tableLen, k);
+  if (b) {
+    return someTS(n.tableT[i]);
+  } else {
+    return noneTS;
+  }
+}
+
+procedure findNext(n: Node, k: K,
+    ghost r: Node, ghost es: Map<Node, Set<K>>, ghost Cn: Map<K, Int>)
+  returns (res: OptionNode)
+  requires node(r, n, es, Cn)
+  ensures node(r, n, es, Cn)
+  ensures res != noneNode ==> k in es[res.nd]
+  ensures res == noneNode ==> (forall n2: Node :: k !in es[n2])
+{
+  if (n.ptrs[0] == null) {  // Leaf node
+    return noneNode;
+  }
+
+  var found, i := arr_find(n.keys, n.len, k);
+
+  if (i < n.len && k == n.keys[i]) {  // arr_find finds upper bound, we want lower
+    i := i + 1;
+  }
+
+  return someNode(n.ptrs[i]);
+}
+
+// addContents is not needed since this is for the non-root nodes
+// TODO However we probably need mergeContents

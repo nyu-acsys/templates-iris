@@ -1,0 +1,249 @@
+options "-abspreds -simplearrays -propreads -stratify -module sstable.spl"
+
+include "file.spl"
+include "array_util.spl"
+
+
+struct Node {
+    var file: fileT;
+    var next: Node;
+    var tableK: Array<K>;
+    var tableT: Array<Int>;
+    var tableLen: Int;
+    ghost var indices: Map<K, Int>;  // inverse of tableK for sstableNodes
+}
+
+define nodeSpatial(x) {
+    true
+    &*& acc(x) 
+    &*& acc(x.tableK) 
+    &*& acc(x.tableT) 
+    //&*& acc(x.next)
+    &*& File(x.file)
+}
+
+define contentsRep(tableK, tableT, indices, Cn, len) {
+    true
+    // Cn is given by the tableK and tableT
+    && (forall i: Int :: 0 <= i < len ==> Cn[tableK[i]] == tableT[i])
+    // For keys not in tableK, Cn is 0
+    && (forall k: K :: indices[k] == -1 ==> Cn[k] == 0)
+    // n.indices is the inverse of n.tableK
+    && (forall k: K :: 0 <= indices[k] < len ==> tableK.map[indices[k]] == k)
+    && (forall i: Int :: 0 <= i < len ==> indices[tableK.map[i]] == i @(noinst i))    
+    && (forall k: K :: -1 <= indices[k] < len)
+}
+
+define nodePure(n, esn, Cn) {
+    true
+    && n.tableLen == n.file.data.length
+    && n.tableLen == n.tableK.length
+    && n.tableLen == n.tableT.length
+    // tableK and tableT equal the file data
+    && (forall i: Int :: 0 <= i < n.tableLen ==> n.tableK[i] == n.file.data[i].key)
+    && (forall i: Int :: 0 <= i < n.tableLen ==> n.tableT[i] == n.file.data[i].ts)
+    // keys are sorted
+    && sorted_map_seg(n.tableK.map, 0, n.tableLen)
+    && contentsRep(n.tableK, n.tableT, n.indices, Cn, n.tableLen)
+    //&& n.next != n && n.next != r
+    // Edgeset to next node is KS if non-null
+    && (n.next != null ==> (forall k: K :: k in esn[n.next]))
+    // All other nodes have empty edgeset
+    && (forall n1: Node :: n1 != n.next ==> esn[n1] == {})
+    && esn[null] == {}
+}
+
+define node(n, esn, Cn) {
+  nodeSpatial(n)
+  &*& nodePure(n, esn, Cn)
+}
+
+
+function merge(Cn: Map<K, Int>, S: Set<K>, Cm: Map<K, Int>) returns (m: Map<K, Int>) {
+    { k: K :: Cn[k] > 0 ? Cn[k] : (k in S ? Cm[k] : 0)  }
+}
+
+function dom(C: Map<K, Int>) returns (res: Set<K>) {
+    { k: K :: C[k] > 0 ? true : false}
+}
+
+function set_of_map_KT(C: Map<K, Int>) returns (res: Set<KT>) {
+    { kt: KT :: C[kt.key] == kt.ts && C[kt.key] > 0 ? true : false }
+}
+
+lemma sorted_map_seg_shorten(m: Map<Int, K>, len: Int, len2: Int)
+    requires sorted_map_seg(m, 0, len)
+    requires len2 < len
+    ensures sorted_map_seg(m, 0, len2)
+{}    
+
+lemma sorted_map_seg_extend(m: Map<Int, K>, len: Int)
+    requires sorted_map_seg(m, 0, len)
+    requires forall i: Int :: 0 <= i < len ==> lt(m[i], m[len])
+    ensures sorted_map_seg(m, 0, len + 1)
+{}
+
+
+
+procedure mergeSort(nk: Array<K>, nt: Array<Int>, mk: Array<K>, mt: Array<Int>, 
+                    nlen: Int, mlen: Int, Cn: Map<K, Int>, Cm: Map<K, Int>) 
+    returns (resk: Array<K>, rest: Array<Int>, m_indices: Map<K, Int>, Cm1: Map<K, Int>)
+    requires acc(nk) &*& acc(nt) &*& acc(mk) &*& acc(mt)
+    requires sorted_map_seg(nk.map, 0, nlen)
+    requires sorted_map_seg(mk.map, 0, mlen)
+    requires nlen == nk.length && mlen == mk.length
+    ensures acc(nk) &*& acc(nt) &*& acc(mk) &*& acc(mt)
+    ensures acc(resk) &*& acc(rest)
+    ensures contentsRep(resk, rest, m_indices, Cm1, resk.length)
+    ensures set_of_map_KT(Cm1) subsetof (set_of_map_KT(Cn)) ++ (set_of_map_KT(Cm))
+    ensures dom(Cm) subsetof dom(Cm1)
+/*
+{
+    var i := 0;
+    var j := 0;
+    var l := 0;
+    resk := new Array<K>(nlen + mlen);
+    rest := new Array<Int>(nlen + mlen);
+    Cm1 := { k: K :: 0 };
+    m_indices := { k: K :: -1 };
+
+    while (i < nlen && j < mlen)
+        invariant acc(nk) &*& acc(nt) &*& acc(mk) &*& acc(mt)
+        invariant acc(resk) &*& acc(rest)
+        invariant l <= i + j
+        invariant i <= nlen
+        invariant j <= mlen
+        invariant lt(nk[i], mk[j]) || nk[i] == mk[j] || lt(mk[j], nk[i])
+        invariant nk == old(nk)
+        invariant mk == old(mk)
+        invariant sorted_map_seg(nk.map, 0, nlen)
+        invariant sorted_map_seg(mk.map, 0, mlen)
+        invariant sorted_map_seg(resk.map, 0, l)
+    {
+        if (lt(nk[i], mk[j])) {
+            resk[l] := nk[i];
+            rest[l] := nt[i];
+            i := i + 1;
+            l := l + 1;
+            // Does Old() refer to pre-loop or pre-iteration?
+            Cm1 := old(Cm1)[nk[i] := nt[i]]; 
+            m_indices := old(m_indices)[nk[i] := l];
+            
+            //pure assert (forall l1: Int :: 0 <= l1 < l ==> lt(resk.map[l1], resk.map[l]));
+            //sorted_map_seg_extend(resk.map, l);
+            //assert  
+        } else {
+            if (nk[i] == mk[i]) {
+                resk[l] := nk[i];
+                rest[l] := nt[i];
+                i := i + 1;
+                j := j + 1;
+                l := l + 1;
+                Cm1 := old(Cm1)[nk[i] := nt[i]];
+                m_indices := old(m_indices)[nk[i] := l];
+
+
+                //sorted_map_seg_extend(resk.map, l);
+            } else {
+                resk[l] := mk[j];
+                rest[l] := mt[j];
+                j := j + 1;
+                l := l + 1;
+                Cm1 := old(Cm1)[mk[j] := mt[j]];
+                m_indices := old(m_indices)[mk[j] := l];
+                
+
+                //sorted_map_seg_extend(resk.map, l); 
+            }
+        }
+    }
+
+    while (i < nlen)
+        invariant acc(resk) &*& acc(rest) 
+        invariant acc(nk) &*& acc(nt)
+        invariant sorted_map_seg(resk.map, 0, l)
+    {
+        resk[l] := nk[i];
+        rest[l] := nt[i];
+    }
+
+    while (j < mlen)
+        invariant acc(resk) &*& acc(rest) 
+        invariant acc(mk) &*& acc(mt)
+        invariant sorted_map_seg(resk.map, 0, l)
+    {
+        resk[l] := mk[j];
+        rest[l] := mt[j];
+    }
+
+}    
+*/
+
+procedure createFileData(ak: Array<K>, at: Array<Int>) returns (res: Array<KT>)
+
+
+lemma set_of_map_KT_empty(C: Map<K, Int>) returns (S: Set<KT>)
+    requires C == { k: K :: 0 }
+    ensures S == set_of_map_KT(C)
+    ensures S == {}
+{   
+    pure assert (forall k: K :: C[k] == 0);
+    pure assert (forall kt: KT :: C[kt.key] == 0);
+    pure assert (forall kt: KT :: kt in set_of_map_KT(C) <=> (C[kt.key] == kt.ts && C[kt.key] > 0));
+    pure assert (forall kt: KT :: !(C[kt.key] > 0));
+    pure assert (forall kt: KT :: !(C[kt.key] == kt.ts && C[kt.key] > 0) ==> kt !in set_of_map_KT(C));
+    pure assert (forall kt: KT :: C[kt.key] == 0 ==> kt !in set_of_map_KT(C));
+    pure assert (forall kt: KT :: !(C[kt.key] == kt.ts && C[kt.key] > 0));
+    //pure assert (forall kt: KT :: kt !in set_of_map_KT(C)); 
+    //pure assert (set_of_map_KT(C) == {});
+    pure assume (S == {} && S == set_of_map_KT(C));
+}
+
+
+procedure mergeContents(n: Node, implicit ghost esn: Map<Node, Set<K>>,
+    implicit ghost Cn: Map<K, Int>, m: Node, implicit ghost esm: Map<Node, Set<K>>,
+    implicit ghost Cm: Map<K, Int>) returns (implicit ghost Cn1: Map<K, Int>, implicit ghost Cm1: Map<K, Int>)
+    requires node(n, esn, Cn) &*& node(m, esm, Cm)
+    requires esn[m] != {}
+    ensures node(n, esn, Cn1) &*& node(m, esm, Cm1)
+    ensures (set_of_map_KT(Cn1) subsetof (set_of_map_KT(Cn)))
+    ensures set_of_map_KT(Cm1) subsetof (set_of_map_KT(Cn)) ++ (set_of_map_KT(Cm))
+    //ensures Disjoint(set_of_map_KT(Cn) ** set_of_map_KT(Cm1), set_of_map_KT(Cn1))
+    ensures dom(Cm) subsetof dom(Cm1)
+    //ensures merge(Cn, esn[m], Cm) == merge (Cn1, esn[m], Cm1)
+{
+    var resk, rest, m_indices, Cm2 := mergeSort(n.tableK, n.tableT, m.tableK, m.tableT, n.tableLen, m.tableLen, Cn, Cm);
+    var new_file_n := createFile();
+    n.file := new_file_n;
+    var new_file_m := createFile();
+    
+    assert acc(m.tableK);
+    //assert nodeSpatial(n);
+
+    //assume (File(new_file_m) &*& emptyFile(new_file_m));
+    //assert false;nodeSpatial(
+    //assert (File(new_file_m));
+    //assert (emptyFile(new_file_m));
+
+    var res := createFileData(resk, rest);
+    //writeFile(new_file_m, res);
+    //m.file := new_file_m;
+    m.indices := m_indices;
+
+    Cn1 := { k: K :: 0 };
+    Cm1 := Cm2;
+    var S := set_of_map_KT_empty(Cn1);
+    pure assert (set_of_map_KT(Cn1) == {});
+    pure assert ({} subsetof set_of_map_KT(Cn));
+    pure assert (set_of_map_KT(Cn1) subsetof set_of_map_KT(Cn));
+    pure assert (set_of_map_KT(Cm1) subsetof (set_of_map_KT(Cn)) ++ (set_of_map_KT(Cm)));
+    pure assert (set_of_map_KT(Cn1) == {} ==> Disjoint(set_of_map_KT(Cn) ** set_of_map_KT(Cm1), set_of_map_KT(Cn1)));
+    pure assert (Disjoint(set_of_map_KT(Cn) ** set_of_map_KT(Cm1), set_of_map_KT(Cn1)));
+    pure assert (dom(Cm) subsetof dom(Cm1));
+    assert nodeSpatial(m);
+    assert nodeSpatial(n);
+    //assert false;
+
+
+    
+}

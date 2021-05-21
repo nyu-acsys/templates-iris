@@ -1,0 +1,160 @@
+options "-simplearrays"
+
+type E
+
+function map_shift(m: Map<Int, E>, src: Int, dst: Int, len: Int)
+  returns (res: Map<Int, E>)
+  requires 0 <= len
+{
+  { i: Int :: i < dst || dst + len <= i ? m[i] : m[src + (i - dst)]
+    //@(matching res[i] yields m[src + (i - dst)])
+    @(matching res[i] yields m[i])
+  }
+}
+
+function map_copy(m1: Map<Int, E>, m2: Map<Int, E>, src: Int, dst: Int, len: Int)
+  returns (res: Map<Int, E>)
+{
+  { i: Int :: dst <= i < dst + len ? m2[src + (i - dst)] : m1[i]
+    @(matching res[i] yields m2[src + (i - dst)])
+    @(matching res[i] yields m1[i])
+  }
+}
+
+  
+// Initialize a[0..len] with value x
+procedure arr_init(a: Array<E>, len: Int, x: E)
+  requires acc(a)
+  requires 0 <= len <= a.length
+  ensures acc(a)
+  ensures forall i: Int :: 0 <= i < len ==> a[i] == x
+{
+  var i := 0;
+
+  while (i < len)
+    invariant acc(a)
+    invariant 0 <= i <= len <= a.length
+    invariant forall k: Int :: 0 <= k < i ==> a[k] == x
+  {
+    a[i] := x;
+    i := i + 1;
+  }
+}
+
+// Shift a[src..src+len] to a[dst..dst+len]
+procedure arr_shift(a: Array<E>, src: Int, dst: Int, len: Int)
+  requires acc(a)
+  requires 0 <= src <= src + len <= a.length && 0 <= dst <= dst + len <= a.length
+  ensures acc(a)
+  ensures a.map == map_shift(old(a.map), src, dst, len)
+{
+  ghost var m := a.map;
+  
+  if (src < dst) {
+    var i := len - 1;
+    
+    while (i >= 0) 
+      invariant acc(a)
+      invariant src < dst
+      invariant 0 <= src <= src + len <= a.length
+      invariant 0 <= dst <= dst + len <= a.length
+      invariant -1 <= i < len
+      invariant map_shift(m, src + i + 1, dst + i + 1, len - i - 1) == a.map
+    {
+      ghost var j: Int;
+      pure assert "test" map_shift(m, src + i + 1, dst + i + 1, len - i - 1)[j] == a.map[j];
+      ghost var m1 := a.map;
+      
+      var tmp := a[src + i];
+      a[dst + i] := tmp;
+      pure assert a.map == m1[dst + i := tmp];
+      pure assert "test" forall j: Int :: map_shift(m, src + (i-1) + 1, dst + (i-1) + 1, len - (i-1) - 1)[j] == a.map[j] with {
+        if (j < (dst + (i-1) + 1) || (dst + (i-1) + 1) + (len - (i-1) - 1) <= j) {
+          pure assert "test" map_shift(m, src + (i-1) + 1, dst + (i-1) + 1, len - (i-1) - 1)[j] == m[j];
+        } else {
+          pure assert "test" map_shift(m, src + (i-1) + 1, dst + (i-1) + 1, len - (i-1) - 1)[j] == m[(src + (i-1) + 1) + (j - (dst + (i-1) + 1))];
+        }
+        if (j < (dst + i + 1) || (dst + i + 1) + (len - i - 1) <= j) {
+          pure assert "test" map_shift(m, src + i + 1, dst + i + 1, len - i - 1)[j] == m1[j];
+          
+        } else {
+          pure assert "test" map_shift(m, src + i + 1, dst + i + 1, len - i - 1)[j] == m[(src + i + 1) + (j - (dst + i + 1))];
+        }
+      }
+      i := i - 1;
+    }
+    pure assert forall j: Int :: map_shift(m, src, dst, len)[j] == a.map[j] with {
+      if (j < (dst + i + 1) || (dst + i + 1) + (len - i - 1) <= j) {
+        pure assert "test" map_shift(m, src + i + 1, dst + i + 1, len - i - 1)[j] == m[j];
+      } else {
+        pure assert "test" map_shift(m, src + i + 1, dst + i + 1, len - i - 1)[j] == m[(src + i + 1) + (j - (dst + i + 1))];
+      }
+    }
+    return;
+  } else if (src > dst) {
+    var i := 0;
+    while (i < len)
+      invariant acc(a)
+      invariant src > dst
+      invariant 0 <= src <= src + len <= a.length
+      invariant 0 <= dst <= dst + len <= a.length
+      invariant 0 <= i <= len 
+      invariant map_shift(m, src, dst, i) == a.map
+    {
+      ghost var m1 := a.map;
+      var tmp := a[src + i];
+      a[dst + i] := a[src + i];
+      pure assert a.map == m1[dst + i := tmp];
+      pure assert "test" forall j: Int :: map_shift(m, src, dst, i+1)[j] == a.map[j] with {
+        if (j < dst || dst + (i+1) <= j) {
+          pure assert "test" map_shift(m, src, dst, i+1)[j] == m[j];
+        } else {
+          pure assert "test" map_shift(m, src, dst, i+1)[j] == m[src + (j - dst)];
+        }
+        if (j < dst || dst + i <= j) {
+          pure assert "test" map_shift(m, src, dst, i)[j] == m1[j];
+          
+        } else {
+          pure assert "test" map_shift(m, src, dst, i)[j] == m[src + (j - dst)];
+        }
+      }
+      i := i + 1;
+    }
+  } 
+  pure assert forall j: Int :: map_shift(m, src, dst, len)[j] == a.map[j] with {
+    if (j < dst || dst + len <= j) {
+      pure assert "test" map_shift(m, src, dst, len)[j] == m[j];
+    } else {
+      pure assert "test" map_shift(m, src, dst, len)[j] == m[src + (j - dst)];
+    }
+  }
+}
+
+// Copy a[src..src+len] to b[dst..dst+len]
+procedure arr_copy(a: Array<E>, b: Array<E>, src: Int, dst: Int, len: Int)
+  requires acc(a) &*& acc(b)
+  requires 0 <= src <= src + len <= a.length
+  requires 0 <= dst <= dst + len <= b.length
+  ensures acc(a) &*& acc(b)
+  ensures a.map == old(a.map)
+  ensures b.map == map_copy(old(b.map), a.map, src, dst, len)
+{
+  ghost var mb := b.map;
+  ghost var ma := a.map;
+  var i := 0;
+  
+  while (i < len)
+    invariant acc(a) &*& acc(b)
+    invariant 0 <= i <= len
+    invariant 0 <= src <= src + len <= a.length
+    invariant 0 <= dst <= dst + len <= b.length
+    invariant a.map == ma
+    invariant b.map == map_copy(mb, ma, src, dst, i)
+  {
+    ghost var m1 := b.map;
+    var tmp := a[src + i];
+    b[dst + i] := tmp;
+    pure assert b.map == m1[dst + i := tmp];
+    i := i + 1;
+  }
+}

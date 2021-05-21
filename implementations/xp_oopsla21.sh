@@ -49,16 +49,8 @@ run()
 rm -f $loctotalfile $timestotalfile $outputfile
 
 echo -e "; Module\t\t& Code\t& Proof\t& Total\t& Time" >> $outputfile
-run "Flow library" "flows ccm multiset-ccm inset-flows lock-coupling"
-run "Array library" "ordered_type array_util"
-run "B+ tree" "b+-tree"
-run "B-link (core)" "b-link-core"
-run "B-link (half split)" "b-link-half"
-run "B-link (full split)" "b-link-full"
-run "Hash table (link)" "hashtbl-give-up"
-run "Hash table (give-up)" "hashtbl-link"
-run "Lock-coupling list" "list-coupling"
-run "Multicopy LSM" "multicopy-lsm"
+run "Array Library" "ordered_type array_basic array_map"
+run "LSM Implementation" "multicopy_lsm"
 
 echo -n -e "Total\t\t" >> $outputfile
 awk -F "\t" '{progs+=$1; specs+=$2; total+=$3} END{printf("\t& %d\t& %d\t& %d", progs, specs, total);}' $loctotalfile >> $outputfile

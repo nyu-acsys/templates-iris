@@ -1,0 +1,73 @@
+include "ordered_type.spl"
+
+// File axiomatization
+type FileT = Array<KT>;
+
+datatype KT = pair(key: K, ts: Int)
+
+predicate File(f: FileT) {
+    acc(f)
+}
+
+/*
+pure predicate emptyFile(f: FileT)
+*/
+
+procedure createFile(d: Array<KT>) returns (f: FileT)
+    requires acc(d)
+    // TODO: conditions on d? 
+    ensures File(f)
+    ensures f == d
+{
+    return d;
+}
+
+procedure readFile(f: FileT) returns (res: Array<KT>)
+    requires File(f)
+    ensures File(f)
+    ensures res == f
+    //ensures f.data.map == old(f.data.map)
+    //ensures f.data == old(f.data)
+{
+    return f;
+}
+
+
+/*
+struct Node {
+    var file: FileT;
+}
+
+define nodeSpatial(n) {
+    acc(n) &*& File(n.file)
+}
+
+procedure readFile_test(n1: Node) 
+    requires nodeSpatial(n1)
+    ensures nodeSpatial(n1)
+{
+    var a1 := readFile(n1.file);
+}
+
+/*
+procedure writeFile_test(n: Node)
+    requires nodeSpatial(n)
+    ensures nodeSpatial(n)
+{
+    var a := new Array<KT>(0);  
+    writeFile(n.file, a);
+}    
+*/
+
+/*
+procedure createFile_test(n: Node)
+    requires nodeSpatial(n)
+    ensures nodeSpatial(n)
+{
+    var b := readFile(n.file);
+    var a := new Array<KT>(0);
+    var f := createFile(a);
+    free(n.file);
+    n.file := f;
+    //assert false;
+}

@@ -1,0 +1,31 @@
+include "ordered_type.spl"
+
+// File axiomatization
+struct fileT {
+  var data: Array<KT>
+} 
+
+datatype KT = pair(key: K, ts: Int)
+
+pure predicate emptyFile(f: fileT)
+
+pure predicate noDup(a: Array<KT>) {
+    forall i: Int, j: Int :: 0 <= i < j < a.length ==> a[i].key != a[j].key
+}
+
+predicate File(f: fileT) {
+    acc(f) &*& acc(f.data) &*& (emptyFile(f) ==> f.data.length == 0)
+}
+
+procedure readFile(f: fileT) returns (res: Array<KT>)
+    requires File(f)
+    ensures File(f) &*& f == old(f)
+    ensures res == f.data 
+
+procedure createFile() returns (f: fileT)
+    requires true
+    ensures File(f) &*& emptyFile(f)
+
+procedure writeFile(f: fileT, d: Array<KT>)
+    requires File(f) &*& emptyFile(f)
+    ensures File(f) &*& f.data == d

@@ -6,7 +6,6 @@ on:
   push:
     branches: [ master ]
   pull_request:
-    branches: [ master ]
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -20,7 +19,9 @@ jobs:
       # Change this to update OCaml version
       OCAML_VERSION: 4.07.1
       # Change this to update Iris version
-      IRIS_VERSION: dev.2020-08-07.2.b2b558ac
+      IRIS_VERSION: 3.4.0
+      # Change this to update Coq version
+      COQ_VERSION: 8.13.1
 
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
@@ -33,7 +34,10 @@ jobs:
         uses: actions/cache@v2
         with:
           path: "~/.opam"
-          key: opam-${{ env.OCAML_VERSION }}
+          key: opam-${{ env.OCAML_VERSION }}-${{ env.IRIS_VERSION }}-${{ env.COQ_VERSION }}
+          restore-keys: |
+            opam-${{ env.OCAML_VERSION }}-${{ env.IRIS_VERSION }}
+            opam-${{ env.OCAML_VERSION }}
 
       - name: Use OCaml
         uses: avsm/setup-ocaml@v1
@@ -44,8 +48,9 @@ jobs:
         run: |
           opam install -y ocamlfind ocamlbuild
           opam repo add coq-released https://coq.inria.fr/opam/released
-          opam repo add iris-dev https://gitlab.mpi-sws.org/iris/opam.git
+          opam install -y coq.$COQ_VERSION
           opam install -y coq-iris.$IRIS_VERSION
+          opam install -y coq-iris-heap-lang.$IRIS_VERSION
 
       - name: Cache Grasshopper
         id: cache_ghp
@@ -71,8 +76,13 @@ jobs:
 
       - name: Check template proofs
         working-directory: templates
-        run: bash xp_pldi20.sh
+        # run: bash xp_pldi20.sh
+        run: |
+          eval $(opam config env)
+          coq_makefile -f _CoqProject -o Makefile
+          make clean
+          TIMER=1 make
 
       - name: Check implementation proofs
         working-directory: implementations
-        run: bash xp_pldi20.sh
+        run: bash xp_book.sh

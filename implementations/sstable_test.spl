@@ -1,0 +1,89 @@
+options "-abspreds -simplearrays -propreads -stratify -module sstable_test.spl"
+
+include "file_test.spl"
+include "array_util.spl"
+
+
+struct Node {
+    var file: FileT;
+    var next: Node;
+    //ghost var data: Map<Int, KT> 
+    //var tableK: Array<K>;
+    //var tableT: Array<Int>;
+    //var tableLen: Int;
+    //ghost var indices: Map<K, Int>;  // inverse of tableK for sstableNodes
+}
+
+define nodeSpatial(x) {
+    true
+    &*& acc(x) 
+    //&*& acc(x.tableK) 
+    //&*& acc(x.tableT) 
+    //&*& acc(x.next)
+    &*& File(x.file)
+}
+
+define sorted_map_seg_KT(a) {
+    true
+}
+
+define nodePure(n, esn) {
+    true
+    //&& n.tableLen == n.file.data.length
+    //&& n.tableLen == n.tableK.length
+    //&& n.tableLen == n.tableT.length
+    // tableK and tableT equal the file data
+    //&& (forall i: Int :: 0 <= i < n.tableLen ==> n.tableK[i] == n.file.data[i].key)
+    //&& (forall i: Int :: 0 <= i < n.tableLen ==> n.tableT[i] == n.file.data[i].ts)
+    // keys are sorted
+    && sorted_map_seg_KT(n.data)
+    //&& sorted_map_seg(n.tableK.map, 0, n.tableLen)
+    //&& contentsRep(n.tableK, n.tableT, n.indices, Cn, n.tableLen)
+    //&& n.next != n && n.next != r
+    // Edgeset to next node is KS if non-null
+    && (n.next != null ==> (forall k: K :: k in esn[n.next]))
+    // All other nodes have empty edgeset
+    && (forall n1: Node :: n1 != n.next ==> esn[n1] == {})
+    && esn[null] == {}
+}
+
+define node(n, esn) {
+  nodeSpatial(n)
+  &*& nodePure(n, esn)
+}
+
+procedure createFileData(ak: Array<K>, at: Array<Int>) returns (res: Array<KT>)
+{}
+
+procedure mergeSort(a1: Array<KT>, a2: Array<KT>, a: Array<KT>)
+    requires acc(a1) &*& acc(a2) &*& acc(a)
+    ensures acc(a1) &*& acc(a2) &*& acc(a)
+    //ensures a1 == old(a1) && a2 == old(a2)
+{
+
+}
+
+procedure mergeContents(n: Node, implicit ghost esn: Map<Node, Set<K>>, 
+    m: Node, implicit ghost esm: Map<Node, Set<K>>) 
+    //returns (res: Array<KT>)
+    requires node(n, esn) &*& node(m, esm)
+    requires esn[m] != {}
+    ensures node(n, esn) &*& node(m, esm)
+{
+    var array_m := readFile(m.file);    
+    var array_n := readFile(n.file);
+    
+    var res := new Array<KT>(10);
+    mergeSort(array_n, array_m, res);
+        
+    var new_file_m := createFile(res);
+    
+    var empty_array := new Array<KT>(0);
+    var new_file_n := createFile(empty_array);
+
+    free(m.file);
+    m.file := new_file_m;
+    free(n.file);
+    n.file := new_file_n;
+
+}

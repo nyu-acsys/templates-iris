@@ -9,11 +9,10 @@ Set Default Proof Using "All".
 Lemma auth_own_incl `{inG Σ (authR A)} `{!CmraDiscrete A} γ (x y: A) :
   own γ (● x) ∗ own γ (◯ y) -∗ ⌜y ≼ x⌝.
 Proof.
-  rewrite -own_op. rewrite own_valid. iPureIntro. rewrite auth_valid_discrete.
-  simpl. intros H1. destruct H1 as [z H2]. destruct H2 as [a Ha]. destruct Ha as [Ha Hb].
-  destruct Hb as [Hb Hc]. apply to_agree_inj in Ha.
-  assert (ε ⋅ y ≡ y) as Hy by apply ucmra_unit_left_id.
-  rewrite Hy in Hb *. intros Hb. rewrite <- Ha in Hb. done.
+  rewrite -own_op. rewrite own_valid. iPureIntro.
+  rewrite auth_both_valid_discrete.
+  simpl. intros H1. destruct H1 as [z H2]. (*destruct H2 as [a Ha]. destruct Ha as [Ha Hb].*)
+  apply z.
 Qed.
 
 Lemma auth_excl_update `{inG Σ (authR (optionUR (exclR A)))} `{OfeDiscrete A} γ ys xs1 xs2 :

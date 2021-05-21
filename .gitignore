@@ -7,7 +7,10 @@
 .lia.cache
 .coqdeps.d
 *.v.d
+*.zip
 Makefile
 Makefile.conf
 .Makefile.d
+CoqMakefile.conf
 grasshopper
+oopsla21_artifact

@@ -132,7 +132,7 @@ Proof.
   unfold op, prodOp. destruct x; try done.
 Qed.
 
-Canonical Structure keysetUR : ucmraT := UcmraT prodT prod_ucmra_mixin.
+Canonical Structure keysetUR : ucmra := Ucmra prodT prod_ucmra_mixin.
 
 Lemma auth_ks_included (a1 a2 b1 b2: gset K) :
   ✓ prod (a1, b1) → ✓ prod (a2, b2) → prod (a1, b1) ≼ prod (a2, b2)
@@ -231,7 +231,7 @@ Section keyset_updates.
   Qed.
 
   (** Ghost update of abstract search structure state *)
-  
+      
   Lemma ghost_update_keyset γ_k dop (k: K) Cn Cn' res K1 C:
     ⊢ ⌜Ψ dop k Cn Cn' res⌝ ∗ own γ_k (● prod (KS, C)) ∗ own γ_k (◯ prod (K1, Cn))
     ∗ ⌜Cn' ⊆ K1⌝ ∗ ⌜k ∈ K1⌝ ∗ ⌜k ∈ KS⌝
@@ -244,7 +244,7 @@ Section keyset_updates.
     iPoseProof ((own_valid γ_k (◯ prod (K1, Cn))) with "Hf") as "%".
     assert ((K1 = KS ∧ Cn = C) ∨
             (∃ a0 b0, KS = K1 ∪ a0 ∧ C = Cn ∪ b0 ∧ K1 ## a0 ∧ Cn ## b0 ∧ Cn ⊆ K1 ∧ C ⊆ KS ∧ b0 ⊆ a0)) as Hs.
-    { apply (auth_ks_included K1 KS Cn C); try done. apply auth_auth_valid. done. }
+    { apply (auth_ks_included K1 KS Cn C); try done. rewrite <- auth_frag_valid. done. apply auth_auth_valid. done. }
     destruct Hs.
     - iEval (unfold Ψ) in "HΨ". destruct H5. destruct dop.
       + iDestruct "HΨ" as "%". destruct H7.
@@ -254,7 +254,7 @@ Section keyset_updates.
         * iMod (own_update_2 γ_k (● prod (KS, C)) (◯ prod (K1, Cn))
           (● prod (KS, C ∪ {[k]}) ⋅ ◯ prod (K1, Cn ∪ {[k]})) with "[Ha] [Hf]") as "(Ha & Hf)"; try done.
           { apply auth_update. apply auth_ks_local_update_insert.
-            split; try done. apply auth_auth_valid. done.   }
+            repeat split; try done. apply auth_auth_valid.  done. apply auth_frag_valid. done.  }
           iModIntro. iExists (C ∪ {[k]}). iEval (rewrite H7). iFrame.
           unfold Ψ. iPureIntro. split; try done. rewrite <-H6. done.
         * assert (Cn' = Cn). { set_solver. } iModIntro. iExists C. iEval (rewrite <-H9) in "Hf".
@@ -262,7 +262,7 @@ Section keyset_updates.
       + iDestruct "HΨ" as "%". destruct H7. destruct res.
         * iMod (own_update_2 γ_k (● prod (KS, C)) (◯ prod (K1, Cn))
           (● prod (KS, C ∖ {[k]}) ⋅ ◯ prod (K1, Cn ∖ {[k]})) with "[Ha] [Hf]") as "(Ha & Hf)"; try done.
-          { apply auth_update. apply auth_ks_local_update_delete. split; try done. apply auth_auth_valid. done. }
+          { apply auth_update. apply auth_ks_local_update_delete. repeat split; try done. apply auth_auth_valid. done. apply auth_frag_valid. done. }
           iModIntro. iExists (C ∖ {[k]}). iEval (rewrite H7). iFrame.
           unfold Ψ. iPureIntro. split; try done. rewrite <-H6. done.
         * assert (Cn' = Cn). { set_solver. } iModIntro. iExists C. iEval (rewrite <-H9) in "Hf".
@@ -282,7 +282,7 @@ Section keyset_updates.
       + iDestruct "HΨ" as "%". destruct H12. destruct res.
         * iMod (own_update_2 γ_k (● prod (KS, C)) (◯ prod (K1, Cn))
           (● prod (KS, C ∖ {[k]}) ⋅ ◯ prod (K1, Cn ∖ {[k]})) with "[Ha] [Hf]") as "(Ha & Hf)"; try done.
-          { apply auth_update. apply auth_ks_local_update_delete. split; try done. }
+          { apply auth_update. apply auth_ks_local_update_delete. repeat split; try done. }
           iModIntro. iExists (C ∖ {[k]}). iEval (rewrite H12). iFrame.
           unfold Ψ. iPureIntro. split; try done. set_solver.
         * assert (Cn' = Cn). { set_solver. } iModIntro. iExists C. iEval (rewrite <-H14) in "Hf".
